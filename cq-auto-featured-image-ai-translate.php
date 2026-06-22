@@ -2,7 +2,7 @@
 /**
  * Plugin Name: CQ Auto Featured Image + AI Translate
  * Description: Full multilingual content repair tool with background queue processing for featured images, Polylang relationships, missing translations, and OpenAI translation automation.
- * Version: 1.11.0
+ * Version: 1.11.1
  * Author: Christopher Queen / ChatGPT
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -3456,6 +3456,44 @@ final class CQ_Auto_Featured_Image_AI_Translate {
 
         if (!get_post($translated_post_id)) {
             return 0;
+        }
+
+        // Authoritative link: translations this plugin created carry the exact source
+        // post ID in META_SOURCE_POST. Trust that over any cross-language text guess —
+        // foreign titles/slugs barely overlap their English originals, so the heuristic
+        // below can otherwise mislink to an unrelated same-author/same-category post.
+        $claimed_source = (int) get_post_meta($translated_post_id, self::META_SOURCE_POST, true);
+        if ($claimed_source) {
+            $claimed_post = get_post($claimed_source);
+            $claimed_valid = $claimed_post
+                && $claimed_post->post_type === 'post'
+                && pll_get_post_language($claimed_source) === $source_lang;
+
+            if ($claimed_valid) {
+                if (self::repair_translation_link($translated_post_id, $claimed_source)) {
+                    update_post_meta($translated_post_id, self::META_POLYLANG_RELINK_ATTEMPTED, current_time('mysql'));
+                    update_post_meta($translated_post_id, self::META_POLYLANG_RELINK_SCORE, 100);
+                    self::log('info', 'Polylang association repaired from authoritative source meta.', $translated_post_id, [
+                        'source_post_id' => $claimed_source,
+                        'translated_lang' => $translated_lang,
+                        'source_lang' => $source_lang,
+                    ]);
+                    return $claimed_source;
+                }
+
+                // We had authoritative info but could not link (e.g. the source already
+                // has a different post for this language). Do NOT fall back to guessing.
+                update_post_meta($translated_post_id, self::META_POLYLANG_RELINK_ATTEMPTED, current_time('mysql'));
+                self::log('warning', 'Authoritative source meta could not be linked; skipping heuristic match to avoid a wrong link.', $translated_post_id, [
+                    'claimed_source' => $claimed_source,
+                    'translated_lang' => $translated_lang,
+                ]);
+                return 0;
+            }
+
+            self::log('warning', 'Stored source post meta was invalid; falling back to heuristic matching.', $translated_post_id, [
+                'claimed_source' => $claimed_source,
+            ]);
         }
 
         $candidates = self::find_source_post_candidates_for_unlinked_translation($translated_post_id, $translated_lang, $source_lang);
