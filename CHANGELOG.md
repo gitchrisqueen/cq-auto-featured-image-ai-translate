@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.11.2
+- Source-post candidate selection (`get_source_post_ids`) now requires an exact source-language match; posts with no language assigned are no longer included. Image-repair candidate selection is unchanged and still spans all languages by design.
+
 ## 1.11.1
 - Fixed Polylang relink choosing the wrong source post. The repair now trusts the authoritative source ID stored in `_cq_afi_source_post_id` (set when the plugin creates a translation) before falling back to cross-language title/slug similarity, which could mislink a foreign post to an unrelated same-author/same-category English post.
 - If the stored source exists but cannot be linked (e.g. the source already has a different post for that language), the relink now stops instead of guessing.

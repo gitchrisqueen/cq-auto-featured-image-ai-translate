@@ -2,7 +2,7 @@
 /**
  * Plugin Name: CQ Auto Featured Image + AI Translate
  * Description: Full multilingual content repair tool with background queue processing for featured images, Polylang relationships, missing translations, and OpenAI translation automation.
- * Version: 1.11.1
+ * Version: 1.11.2
  * Author: Christopher Queen / ChatGPT
  * Requires at least: 6.0
  * Requires PHP: 7.4
@@ -2825,9 +2825,11 @@ final class CQ_Auto_Featured_Image_AI_Translate {
 
         $source_lang = self::get_source_language_slug();
 
+        // Strict: only posts EXPLICITLY in the source language. Posts in another
+        // language — or with no language assigned — are excluded, so source-post
+        // candidate lists never leak other languages.
         return array_values(array_filter($posts, function ($post_id) use ($source_lang) {
-            $lang = pll_get_post_language((int) $post_id);
-            return !$lang || $lang === $source_lang;
+            return pll_get_post_language((int) $post_id) === $source_lang;
         }));
     }
 
