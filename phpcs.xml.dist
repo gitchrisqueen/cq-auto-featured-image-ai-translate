@@ -1,0 +1,72 @@
+<?xml version="1.0"?>
+<ruleset name="CQ Auto Featured Image + AI Translate">
+    <description>
+        WordPress Coding Standards gate for the plugin.
+
+        Scope: this is a deploy gate, not a full style reformat. The existing code
+        predates WPCS, so the purely cosmetic/whitespace sniffs (indentation,
+        call-signature spacing, array alignment, short-array syntax, docblocks,
+        etc.) are excluded below. What remains is the substantive set: security,
+        correctness, SQL preparation, escaping/sanitization, and WP best practices.
+
+        Errors block the build; warnings are reported for awareness but do not fail
+        it (see ignore_warnings_on_exit). Run `composer phpcbf` to auto-fix and
+        `composer phpcs` to check locally.
+    </description>
+
+    <!-- Scan the current directory by default. -->
+    <file>.</file>
+
+    <arg name="extensions" value="php"/>
+    <arg value="ps"/>
+    <arg name="colors"/>
+    <arg name="parallel" value="8"/>
+
+    <!-- Never scan these. -->
+    <exclude-pattern>*/vendor/*</exclude-pattern>
+    <exclude-pattern>*/node_modules/*</exclude-pattern>
+    <exclude-pattern>*/.github/*</exclude-pattern>
+    <exclude-pattern>*/.claude/*</exclude-pattern>
+
+    <!-- Report warnings, but only errors fail the build. -->
+    <config name="ignore_warnings_on_exit" value="1"/>
+
+    <rule ref="WordPress">
+        <!-- Cosmetic / formatting families: not deploy-blocking (all auto-fixable). -->
+        <exclude name="Generic.WhiteSpace"/>
+        <exclude name="Generic.Formatting"/>
+        <exclude name="Generic.Arrays"/>
+        <exclude name="PEAR.Functions.FunctionCallSignature"/>
+        <exclude name="Squiz.Functions.FunctionDeclarationArgumentSpacing"/>
+        <exclude name="Squiz.WhiteSpace"/>
+        <exclude name="Squiz.Strings.DoubleQuoteUsage"/>
+        <exclude name="Squiz.ControlStructures"/>
+        <exclude name="Universal.WhiteSpace"/>
+        <exclude name="Universal.Arrays.DisallowShortArraySyntax"/>
+        <exclude name="Universal.Operators.DisallowStandalonePostIncrementDecrement"/>
+        <exclude name="Universal.Operators.DisallowShortTernary"/>
+        <exclude name="NormalizedArrays.Arrays.ArrayBraceSpacing"/>
+        <exclude name="WordPress.WhiteSpace"/>
+        <exclude name="WordPress.Arrays"/>
+        <exclude name="WordPress.PHP.YodaConditions"/>
+        <exclude name="WordPress.Files.FileName"/>
+        <!-- Missing docblocks: not deploy-blocking for this project. -->
+        <exclude name="Squiz.Commenting"/>
+        <exclude name="Generic.Commenting"/>
+    </rule>
+
+    <!-- Text-domain check for i18n. -->
+    <rule ref="WordPress.WP.I18n">
+        <properties>
+            <property name="text_domain" type="array">
+                <element value="cq-auto-featured-image-ai-translate"/>
+            </property>
+        </properties>
+    </rule>
+
+    <!-- Minimum supported WP version (matches plugin header "Requires at least"). -->
+    <config name="minimum_wp_version" value="6.0"/>
+
+    <!-- PHP cross-version compatibility floor (matches "Requires PHP"). -->
+    <config name="testVersion" value="7.4-"/>
+</ruleset>

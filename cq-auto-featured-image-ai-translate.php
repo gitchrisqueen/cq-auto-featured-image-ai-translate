@@ -249,8 +249,8 @@ final class CQ_Auto_Featured_Image_AI_Translate {
 
         $mode = isset($_GET['cq_afi_export_mode']) ? sanitize_key((string) $_GET['cq_afi_export_mode']) : 'all';
         $days = isset($_GET['cq_afi_export_days']) ? max(1, min(3650, absint($_GET['cq_afi_export_days']))) : 7;
-        $start = isset($_GET['cq_afi_export_start']) ? sanitize_text_field((string) $_GET['cq_afi_export_start']) : '';
-        $end = isset($_GET['cq_afi_export_end']) ? sanitize_text_field((string) $_GET['cq_afi_export_end']) : '';
+        $start = isset($_GET['cq_afi_export_start']) ? sanitize_text_field(wp_unslash((string) $_GET['cq_afi_export_start'])) : '';
+        $end = isset($_GET['cq_afi_export_end']) ? sanitize_text_field(wp_unslash((string) $_GET['cq_afi_export_end'])) : '';
 
         $logs = self::filter_logs_for_export(self::get_logs(), $mode, $days, $start, $end);
 
@@ -1444,12 +1444,16 @@ final class CQ_Auto_Featured_Image_AI_Translate {
 
         $statuses = ["publish", "draft", "pending", "future", "private"];
         $placeholders = implode(',', array_fill(0, count($statuses), '%s'));
+        // $placeholders is a generated list of %s tokens (not user data); the
+        // status values are bound through $wpdb->prepare() below.
+        // phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared
         $sql = $wpdb->prepare(
             "SELECT COUNT(ID) FROM {$wpdb->posts} WHERE post_type = 'post' AND post_status IN ($placeholders)",
             $statuses
         );
 
         return (int) $wpdb->get_var($sql);
+        // phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared
     }
 
     private static function start_background_audit(bool $auto_start_repair): void {
@@ -1736,6 +1740,9 @@ final class CQ_Auto_Featured_Image_AI_Translate {
 
         $params = array_merge([$last_post_id], $statuses, [$limit]);
 
+        // $status_placeholders is a generated list of %s tokens (not user data);
+        // every value is bound through $wpdb->prepare() below.
+        // phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared
         $sql = $wpdb->prepare(
             "SELECT ID FROM {$wpdb->posts}
              WHERE ID > %d
@@ -1747,6 +1754,7 @@ final class CQ_Auto_Featured_Image_AI_Translate {
         );
 
         return array_map('intval', (array) $wpdb->get_col($sql));
+        // phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared
     }
 
     private static function empty_audit_aggregate(): array {

@@ -35,6 +35,9 @@ if ( ! defined( 'WP_CLI' ) || ! WP_CLI ) {
 	return;
 }
 
+// This is a WP-CLI `eval-file` script that runs in the global scope by design,
+// so its working variables are top-level locals rather than function-scoped.
+// phpcs:disable WordPress.WP.GlobalVariablesOverride.Prohibited
 $argv_in   = isset( $args ) && is_array( $args ) ? $args : array();
 $mode      = isset( $argv_in[0] ) ? strtolower( (string) $argv_in[0] ) : 'dry';
 $post_type = isset( $argv_in[1] ) ? sanitize_key( (string) $argv_in[1] ) : 'post';
