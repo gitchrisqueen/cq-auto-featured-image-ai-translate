@@ -79,7 +79,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Deploy via rsync over SSH
-        uses: easingthemes/ssh-deploy@v5
+        uses: easingthemes/ssh-deploy@v6.0.3
         with:
           SSH_PRIVATE_KEY: ${{ secrets.SFTP_SSH_KEY }}
           REMOTE_HOST: ${{ secrets.SFTP_HOST }}
