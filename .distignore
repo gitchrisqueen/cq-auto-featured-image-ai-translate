@@ -1,0 +1,18 @@
+# Paths excluded from the deployed plugin artifact.
+# The deploy step's EXCLUDE list in .github/workflows/ci-deploy.yml mirrors this.
+.git
+.github
+.claude
+.gitignore
+.gitattributes
+.distignore
+composer.json
+composer.lock
+phpcs.xml.dist
+phpcs.xml
+vendor
+node_modules
+README.md
+CHANGELOG.md
+*.zip
+.DS_Store

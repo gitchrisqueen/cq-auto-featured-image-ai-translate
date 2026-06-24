@@ -1,0 +1,95 @@
+name: CI & Deploy
+
+# Run checks on every PR and on pushes to main.
+# Deploy to the host over SFTP only after checks pass on main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Never let two deploys to the same branch overlap.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: PHP lint (php ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.0', '8.1', '8.2']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Lint all PHP files
+        run: |
+          find . -path ./vendor -prune -o -name '*.php' -print0 \
+            | xargs -0 -n1 -P4 php -l
+
+  phpcs:
+    name: WordPress Coding Standards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer:v2
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ hashFiles('composer.lock', 'composer.json') }}
+          restore-keys: composer-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Run PHPCS
+        run: vendor/bin/phpcs -q
+
+  deploy:
+    name: Deploy to host (SFTP)
+    needs: [lint, phpcs]
+    runs-on: ubuntu-latest
+    # Only deploy real pushes to main (and manual dispatch on main); never on PRs.
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via rsync over SSH
+        uses: easingthemes/ssh-deploy@v5
+        with:
+          SSH_PRIVATE_KEY: ${{ secrets.SFTP_SSH_KEY }}
+          REMOTE_HOST: ${{ secrets.SFTP_HOST }}
+          REMOTE_USER: ${{ secrets.SFTP_USER }}
+          REMOTE_PORT: ${{ secrets.SFTP_PORT }}
+          TARGET: ${{ secrets.SFTP_REMOTE_PATH }}
+          SOURCE: "./"
+          # -r recurse, -l symlinks, -t times, -z compress, -v verbose.
+          # No -p/-g/-o: shared hosts often reject perm/owner changes.
+          ARGS: "-rltzv --delete"
+          # Comma-separated, NO spaces (the action splits on "," verbatim).
+          # Mirrors .distignore.
+          EXCLUDE: ".git/,.github/,.claude/,.gitignore,.gitattributes,.distignore,composer.json,composer.lock,phpcs.xml.dist,phpcs.xml,vendor/,node_modules/,README.md,CHANGELOG.md,.DS_Store,*.zip"
