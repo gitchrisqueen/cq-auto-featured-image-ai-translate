@@ -54,6 +54,10 @@
  *   # 4. RELINK: rebuild Polylang translation groups from the source meta.
  *   wp eval-file .../tools/fix-languages.php relink 17
  *
+ *   # RECACHE: drop cheap script/heuristic detections (keeps paid AI results) so
+ *   #          "detect" recomputes them — use after the detector is improved.
+ *   wp eval-file .../tools/fix-languages.php recache 17
+ *
  *   # UNDO: restore original language tags and untrash everything this tool did.
  *   wp eval-file .../tools/fix-languages.php undo 17
  *
@@ -67,7 +71,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 if ( ! defined( 'WP_CLI' ) || ! WP_CLI ) {
-	echo "Run with WP-CLI: wp eval-file <this-file> [detect|plan|apply|relink|undo] [site_id] [ai] [limit=N]\n";
+	echo "Run with WP-CLI: wp eval-file <this-file> [detect|recache|plan|apply|relink|undo] [site_id] [ai] [limit=N]\n";
 	return;
 }
 
@@ -86,7 +90,7 @@ foreach ( $argv_in as $raw ) {
 	if ( '' === $arg ) {
 		continue;
 	}
-	if ( in_array( $arg, array( 'detect', 'plan', 'apply', 'relink', 'undo' ), true ) ) {
+	if ( in_array( $arg, array( 'detect', 'recache', 'plan', 'apply', 'relink', 'undo' ), true ) ) {
 		$mode = $arg;
 	} elseif ( 'ai' === $arg ) {
 		$use_ai = true;
@@ -157,14 +161,19 @@ foreach ( $registered as $slug ) {
 
 // ---- Current language tag of a post ----
 $current_lang = function ( $pid ) {
+	// Read the `language` taxonomy term directly first — reliable under WP-CLI,
+	// where pll_get_post_language() can return empty before Polylang's full init.
+	$t = get_the_terms( (int) $pid, 'language' );
+	if ( $t && ! is_wp_error( $t ) ) {
+		return (string) $t[0]->slug;
+	}
 	if ( function_exists( 'pll_get_post_language' ) ) {
 		$l = pll_get_post_language( (int) $pid, 'slug' );
 		if ( $l ) {
 			return (string) $l;
 		}
 	}
-	$t = get_the_terms( (int) $pid, 'language' );
-	return ( $t && ! is_wp_error( $t ) ) ? (string) $t[0]->slug : '';
+	return '';
 };
 
 $base_of = function ( $slug ) {
@@ -202,33 +211,46 @@ $detect_script_lang = function ( $text ) {
 	if ( $total < 8 ) {
 		return ''; // Too little text; defer.
 	}
-	// Japanese if kana present.
-	if ( $c['kana'] > 0 && ( $c['kana'] + $c['han'] ) / $total > 0.15 ) {
-		return 'ja';
+	// Treat Han + Kana as one CJK script for dominance, then split zh vs ja.
+	$cjk     = $c['han'] + $c['kana'];
+	$scripts = array(
+		'cjk' => $cjk,
+		'ar'  => $c['ar'],
+		'he'  => $c['he'],
+		'hi'  => $c['hi'],
+		'bn'  => $c['bn'],
+		'th'  => $c['th'],
+		'km'  => $c['km'],
+		'el'  => $c['el'],
+		'ta'  => $c['ta'],
+		'ko'  => $c['ko'],
+		'cyr' => $c['cyr'],
+	);
+	arsort( $scripts );
+	$best = (string) key( $scripts );
+	$bn   = (int) current( $scripts );
+	// The winning non-Latin script must be at least as common as Latin and a real
+	// share of the text (guards Latin-body posts that carry a short non-Latin title).
+	if ( $bn < 1 || $bn < $c['lat'] || $bn / $total <= 0.2 ) {
+		return ''; // Latin-dominant or inconclusive -> heuristic/AI.
 	}
-	// Pick the dominant non-Latin script.
-	$nonlat = array( 'han', 'ko', 'ar', 'he', 'hi', 'bn', 'th', 'km', 'el', 'ta', 'cyr' );
-	$best   = '';
-	$bn     = 0;
-	foreach ( $nonlat as $s ) {
-		if ( $c[ $s ] > $bn ) {
-			$best = $s;
-			$bn   = $c[ $s ];
+	if ( 'cjk' === $best ) {
+		// Chinese and Japanese are BOTH Han-heavy; only kana distinguishes them.
+		// Compare kana to the CJK total (not the whole text) so a few stray kana
+		// marks (e.g. the ・ middle dot or ー long-vowel mark that appear in Chinese)
+		// cannot flip a Chinese post to Japanese.
+		if ( $c['kana'] >= 2 && $cjk > 0 && $c['kana'] / $cjk >= 0.06 ) {
+			return 'ja';
 		}
+		return 'zh';
 	}
-	if ( '' !== $best && $bn >= $c['lat'] && $bn / $total > 0.2 ) {
-		if ( 'han' === $best ) {
-			return 'zh';
-		}
-		if ( 'cyr' === $best ) {
-			// Ukrainian-specific letters distinguish uk from ru.
-			$uk = preg_match_all( '/[іїєґІЇЄҐ]/u', $text );
-			$ru = preg_match_all( '/[ыэъёЫЭЪЁ]/u', $text );
-			return ( $uk > 0 && $uk >= $ru ) ? 'uk' : 'ru';
-		}
-		return $best; // ko, ar, he, hi, bn, th, km, el, ta.
+	if ( 'cyr' === $best ) {
+		// Ukrainian-specific letters distinguish uk from ru.
+		$uk = preg_match_all( '/[іїєґІЇЄҐ]/u', $text );
+		$ru = preg_match_all( '/[ыэъёЫЭЪЁ]/u', $text );
+		return ( $uk > 0 && $uk >= $ru ) ? 'uk' : 'ru';
 	}
-	return ''; // Latin-dominant -> needs heuristic/AI.
+	return $best; // ar, he, hi, bn, th, km, el, ta, ko.
 };
 
 // ---- Latin-script guesser (en/es/de/fr/pt/tr/vi) ----
@@ -413,6 +435,33 @@ if ( 'undo' === $mode ) {
 }
 
 // =====================================================================
+// RECACHE — drop cheap (script/heuristic) detections so they recompute on the
+// next "detect", while PRESERVING paid AI results. Use after improving the
+// detector so you don't pay for AI again.
+// =====================================================================
+if ( 'recache' === $mode ) {
+	$cleared = 0;
+	$kept_ai = 0;
+	foreach ( $all_ids as $pid ) {
+		$via = (string) get_post_meta( $pid, $meta_true_via, true );
+		if ( 'ai' === $via ) {
+			++$kept_ai;
+			continue;
+		}
+		if ( '' !== (string) get_post_meta( $pid, $meta_true, true ) ) {
+			delete_post_meta( $pid, $meta_true );
+			delete_post_meta( $pid, $meta_true_via );
+			++$cleared;
+		}
+	}
+	WP_CLI::success( sprintf( 'RECACHE: cleared %d script/heuristic detection(s); kept %d AI result(s). Now re-run "detect %d ai".', $cleared, $kept_ai, $site_id ) );
+	if ( $switched ) {
+		restore_current_blog();
+	}
+	return;
+}
+
+// =====================================================================
 // DETECT — resolve and cache true language per post
 // =====================================================================
 if ( 'detect' === $mode ) {
@@ -549,10 +598,25 @@ foreach ( $all_ids as $pid ) {
 	}
 }
 
+// A post that is the SOURCE of at least one surviving translation must never be
+// trashed as a duplicate — doing so would orphan its translations into their own
+// groups and undercount its language (this is why English came out low). Track
+// those source ids and protect them below.
+$referenced = array();
+foreach ( array_keys( $survivors ) as $pid ) {
+	$s = isset( $src_of[ $pid ] ) ? (int) $src_of[ $pid ] : 0;
+	if ( $s > 0 && $s !== $pid ) {
+		$referenced[ $s ] = true;
+	}
+}
+
 // Dedupe: group survivors by (root source, true base). Keep best, trash rest.
-// "Best" score: correctly-tagged + published + content length + low ID.
-$score_of = function ( $pid ) use ( $survivors, $tag_of, $base_of, $status_of, $len_of ) {
+// "Best" score: referenced-source + correctly-tagged + published + content length, low ID.
+$score_of = function ( $pid ) use ( $survivors, $tag_of, $base_of, $status_of, $len_of, $referenced ) {
 	$s = 0;
+	if ( isset( $referenced[ $pid ] ) ) {
+		$s += 4000000; // A source for other translations — strongly prefer keeping it.
+	}
 	if ( $base_of( $tag_of[ $pid ] ) === $survivors[ $pid ] ) {
 		$s += 1000000;
 	}
@@ -589,6 +653,9 @@ foreach ( $groups as $key => $pids ) {
 	);
 	$keeper = array_shift( $pids );
 	foreach ( $pids as $loser ) {
+		if ( isset( $referenced[ $loser ] ) ) {
+			continue; // It is a source for other translations — keep it.
+		}
 		$plan_trash_dupe[ $loser ] = 'dupe of #' . $keeper . ' (' . $key . ')';
 	}
 }
@@ -623,6 +690,9 @@ foreach ( $by_title as $key => $pids ) {
 	);
 	$keeper = array_shift( $pids );
 	foreach ( $pids as $loser ) {
+		if ( isset( $referenced[ $loser ] ) ) {
+			continue; // It is a source for other translations — keep it.
+		}
 		$plan_trash_dupe[ $loser ] = 'title-dupe of #' . $keeper;
 	}
 }
