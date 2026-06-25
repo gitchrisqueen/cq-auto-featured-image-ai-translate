@@ -16,6 +16,12 @@
  * changed. Because consecutive posts are spaced a full day apart, the ordering
  * is unambiguous regardless of the time component.
  *
+ * POLYLANG: posts that are translations of one another (tied via Polylang) are
+ * treated as a single unit and given the SAME timestamp, so every language
+ * version of a post shares one publish date. The group is positioned in the
+ * ordering by its highest-ID member and consumes a single day-slot. This works
+ * whether or not Polylang is active; without it, every post is its own group.
+ *
  * MULTISITE: on a multisite network this operates on ONE site at a time. Pass
  * the numeric site (blog) ID as an argument, or omit it to get an interactive
  * list of sites to choose from. On a single-site install the site argument is
@@ -177,65 +183,121 @@ if ( $undo ) {
 	return;
 }
 
-// DRY-RUN / APPLY: walk newest-ID-first, assigning today, today-1, today-2, ...
-// The base date is "today" in the site's local timezone.
+// Detect Polylang so translations of a post can be tied to one shared date.
+// Prefer the 'post_translations' taxonomy (reads the current site's term tables
+// directly, which is reliable after switch_to_blog); fall back to the PLL API.
+$has_pll_tax = taxonomy_exists( 'post_translations' );
+$has_pll_fn  = function_exists( 'pll_get_post_translations' );
+$has_lang_tax = taxonomy_exists( 'language' );
+if ( $has_pll_tax || $has_pll_fn ) {
+	WP_CLI::log( 'Polylang detected: translation groups will share one date.' );
+	WP_CLI::log( str_repeat( '-', 70 ) );
+}
+
+// DRY-RUN / APPLY: walk newest-ID-first. Each translation group is handled once,
+// at the slot of its highest-ID member, and every member gets the same timestamp.
 $base_date  = current_time( 'Y-m-d' );
 $index      = 0;
 $candidates = 0;
+$processed  = array();
 
 foreach ( $ids as $id ) {
-	$id   = (int) $id;
+	$id = (int) $id;
+	if ( isset( $processed[ $id ] ) ) {
+		continue; // Already handled as part of an earlier post's translation group.
+	}
 	$post = get_post( $id );
 	if ( ! $post ) {
+		$processed[ $id ] = true;
 		continue;
 	}
 
-	// Preserve the original time-of-day; only the calendar date moves.
+	// Resolve the translation group (all tied IDs), always including this post.
+	$group = array( $id );
+	if ( $has_pll_tax ) {
+		$terms = get_the_terms( $id, 'post_translations' );
+		if ( $terms && ! is_wp_error( $terms ) ) {
+			$data = maybe_unserialize( $terms[0]->description );
+			if ( is_array( $data ) ) {
+				$group = array_map( 'intval', array_values( $data ) );
+			}
+		}
+	} elseif ( $has_pll_fn ) {
+		$tr = pll_get_post_translations( $id );
+		if ( is_array( $tr ) && $tr ) {
+			$group = array_map( 'intval', array_values( $tr ) );
+		}
+	}
+	$group[] = $id;
+	$group   = array_filter( array_unique( $group ) ); // de-dup, drop 0/invalid.
+
+	// Shared target datetime for the whole group, based on the representative
+	// (this post = the highest-ID member that anchored the slot).
 	$time_part = substr( (string) $post->post_date, 11, 8 );
 	if ( '' === trim( $time_part ) || '00:00:00' === $time_part ) {
 		$time_part = '12:00:00';
 	}
-
 	$target_date   = gmdate( 'Y-m-d', strtotime( $base_date . ' -' . $index . ' days' ) );
 	$new_post_date = $target_date . ' ' . $time_part;
 	$new_post_gmt  = get_gmt_from_date( $new_post_date );
-
 	++$index;
 
-	if ( $post->post_date === $new_post_date ) {
-		continue; // Already correct.
+	$tied = count( $group ) > 1;
+	if ( $tied ) {
+		WP_CLI::log( sprintf( 'Tied translation group (%d posts)  ->  %s', count( $group ), $new_post_date ) );
 	}
 
-	++$candidates;
-	WP_CLI::log( sprintf( '#%d  %s  current=%s  ->  new=%s', $id, get_the_title( $id ), $post->post_date, $new_post_date ) );
-
-	if ( $apply ) {
-		// Save a one-time rollback copy of the current date before overwriting.
-		if ( '' === (string) get_post_meta( $id, $meta_backup, true ) ) {
-			update_post_meta( $id, $meta_backup, $post->post_date );
-			update_post_meta( $id, $meta_backup_gmt, $post->post_date_gmt );
+	foreach ( $group as $gid ) {
+		$gid                = (int) $gid;
+		$processed[ $gid ]  = true;
+		$gpost              = ( $gid === $id ) ? $post : get_post( $gid );
+		if ( ! $gpost ) {
+			continue;
 		}
-		$wpdb->update(
-			$wpdb->posts,
-			array(
-				'post_date'     => $new_post_date,
-				'post_date_gmt' => $new_post_gmt,
-			),
-			array( 'ID' => $id ),
-			array( '%s', '%s' ),
-			array( '%d' )
-		);
-		clean_post_cache( $id );
-		++$changed;
+		if ( $gpost->post_date === $new_post_date ) {
+			continue; // Already correct.
+		}
+
+		// Best-effort language label for the dry-run output.
+		$lang = '';
+		if ( $has_lang_tax ) {
+			$lt = get_the_terms( $gid, 'language' );
+			if ( $lt && ! is_wp_error( $lt ) ) {
+				$lang = '[' . $lt[0]->slug . '] ';
+			}
+		}
+
+		++$candidates;
+		WP_CLI::log( sprintf( '  #%d  %s%s  current=%s  ->  new=%s', $gid, $lang, get_the_title( $gid ), $gpost->post_date, $new_post_date ) );
+
+		if ( $apply ) {
+			// Save a one-time rollback copy of the current date before overwriting.
+			if ( '' === (string) get_post_meta( $gid, $meta_backup, true ) ) {
+				update_post_meta( $gid, $meta_backup, $gpost->post_date );
+				update_post_meta( $gid, $meta_backup_gmt, $gpost->post_date_gmt );
+			}
+			$wpdb->update(
+				$wpdb->posts,
+				array(
+					'post_date'     => $new_post_date,
+					'post_date_gmt' => $new_post_gmt,
+				),
+				array( 'ID' => $gid ),
+				array( '%s', '%s' ),
+				array( '%d' )
+			);
+			clean_post_cache( $gid );
+			++$changed;
+		}
 	}
 }
 
 WP_CLI::log( str_repeat( '-', 70 ) );
 
 if ( $apply ) {
-	WP_CLI::success( sprintf( 'Reordered %d post date(s). Re-run with "undo" to revert.', $changed ) );
+	WP_CLI::success( sprintf( 'Reordered %d post date(s) across %d group(s). Re-run with "undo" to revert.', $changed, $index ) );
 } else {
-	WP_CLI::success( sprintf( 'DRY RUN: %d post(s) would be reordered. Re-run with "apply" to write the changes.', $candidates ) );
+	WP_CLI::success( sprintf( 'DRY RUN: %d post(s) across %d group(s) would be reordered. Re-run with "apply" to write the changes.', $candidates, $index ) );
 }
 
 if ( $switched ) {
