@@ -88,6 +88,7 @@ final class CQ_Auto_Featured_Image_AI_Translate {
         add_action('wp_ajax_cq_afi_pause_all', [__CLASS__, 'ajax_pause_all']);
         add_action('wp_ajax_cq_afi_resume_all', [__CLASS__, 'ajax_resume_all']);
         add_action('wp_ajax_cq_afi_cancel_all', [__CLASS__, 'ajax_cancel_all']);
+        add_action('wp_ajax_cq_afi_advance_workers', [__CLASS__, 'ajax_advance_workers']);
         add_action('wp_ajax_cq_afi_pause_background_audit', [__CLASS__, 'ajax_pause_background_audit']);
         add_action('wp_ajax_cq_afi_resume_background_audit', [__CLASS__, 'ajax_resume_background_audit']);
         add_action('wp_ajax_cq_afi_cancel_background_audit', [__CLASS__, 'ajax_cancel_background_audit']);
@@ -420,11 +421,21 @@ final class CQ_Auto_Featured_Image_AI_Translate {
 
             let cqAfiManualRunning = false;
 
+            function workersRunning(data) {
+                var d = (data && data.data) ? data.data : {};
+                var auditRunning = d.audit_status && d.audit_status.state === 'running';
+                var repairRunning = d.background_status && d.background_status.state === 'running';
+                return auditRunning || repairRunning;
+            }
+
             function pollStatus() {
                 $.post(ajaxUrl, { action: 'cq_afi_get_status', nonce: nonce }, function(data) {
                     renderStatus(data);
                     if (data && data.success && data.data && data.data.job && data.data.job.state === 'running' && data.data.job.mode === 'manual-browser') {
                         processManualQueue();
+                    }
+                    if (workersRunning(data)) {
+                        driveWorkers();
                     }
                 });
             }
@@ -442,6 +453,27 @@ final class CQ_Auto_Featured_Image_AI_Translate {
                     }
                 }).fail(function() {
                     cqAfiManualRunning = false;
+                    setTimeout(pollStatus, 5000);
+                });
+            }
+
+            let cqAfiDriving = false;
+
+            // Browser-driven fallback for the audit + repair: advances one batch per
+            // call so progress never depends on the host's (often blocked) background
+            // cron. Keeps going while either phase is running; stops when both finish.
+            function driveWorkers() {
+                if (cqAfiDriving) return;
+                cqAfiDriving = true;
+
+                $.post(ajaxUrl, { action: 'cq_afi_advance_workers', nonce: nonce }, function(data) {
+                    renderStatus(data);
+                    cqAfiDriving = false;
+                    if (workersRunning(data)) {
+                        setTimeout(driveWorkers, 1200);
+                    }
+                }).fail(function() {
+                    cqAfiDriving = false;
                     setTimeout(pollStatus, 5000);
                 });
             }
@@ -467,7 +499,8 @@ final class CQ_Auto_Featured_Image_AI_Translate {
                 e.preventDefault();
                 $.post(ajaxUrl, { action: 'cq_afi_start_audit_and_repair', nonce: nonce }, function(data) {
                     renderStatus(data);
-                    alert('Audit started. Featured images, translation relinks, and missing translations will be repaired automatically when the audit completes. You may leave this page.');
+                    driveWorkers();
+                    alert('Audit started. Featured images, translation relinks, and missing translations will be repaired automatically when the audit completes. Keep this page open and it will keep things moving even if the host scheduler is blocked.');
                 });
             });
 
@@ -483,6 +516,7 @@ final class CQ_Auto_Featured_Image_AI_Translate {
                 e.preventDefault();
                 $.post(ajaxUrl, { action: 'cq_afi_resume_all', nonce: nonce }, function(data) {
                     renderStatus(data);
+                    driveWorkers();
                     alert('Resumed.');
                 });
             });
@@ -947,6 +981,37 @@ final class CQ_Auto_Featured_Image_AI_Translate {
         wp_send_json_success(self::status_payload());
     }
 
+    /**
+     * Browser-driven fallback. When the host's background cron / Action Scheduler
+     * loopback is blocked (common on shared hosts), the open admin page calls this
+     * via admin-ajax — a normal authenticated request that always runs — to advance
+     * the work one batch at a time. Drives whichever phase is active: audit first,
+     * then the repair queue.
+     */
+    public static function ajax_advance_workers(): void {
+        self::verify_ajax();
+
+        $audit = self::get_audit_status();
+        if (($audit['state'] ?? '') === 'running') {
+            try {
+                self::background_audit_worker_inner();
+            } catch (Throwable $e) {
+                self::update_audit_status([
+                    'last_run_at' => current_time('mysql'),
+                    'message' => 'Audit batch error: ' . $e->getMessage(),
+                ]);
+                self::log('error', 'Browser-driven audit batch failed.', 0, ['error' => $e->getMessage()]);
+            }
+        } else {
+            $background = self::get_background_status();
+            if (($background['state'] ?? '') === 'running') {
+                self::process_repair_queue_step();
+            }
+        }
+
+        wp_send_json_success(self::status_payload());
+    }
+
     public static function ajax_pause_background_audit(): void {
         self::verify_ajax();
         self::pause_background_audit();
@@ -1345,7 +1410,7 @@ final class CQ_Auto_Featured_Image_AI_Translate {
         $html .= '<p><strong>Auto-start repair:</strong> ' . esc_html(!empty($s['auto_start_repair']) ? 'Yes' : 'No') . '</p>';
         $html .= '<p><strong>Message:</strong> ' . esc_html($s['message']) . '</p>';
         if (self::audit_appears_stuck($s)) {
-            $html .= '<p class="cq-afi-log-warning"><strong>Warning:</strong> This audit appears stuck. Click Kick/Requeue Audit Worker or confirm Action Scheduler/WP-Cron is running.</p>';
+            $html .= '<p class="cq-afi-log-warning"><strong>Note:</strong> The host&rsquo;s background scheduler (WP-Cron / Action Scheduler) does not appear to be running, so the audit cannot advance on its own. Keep this Repair page open &mdash; it will drive the audit forward automatically from your browser until the host scheduler catches up.</p>';
         }
         $html .= '</div>';
 
