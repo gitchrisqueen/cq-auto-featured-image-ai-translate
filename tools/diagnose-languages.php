@@ -143,9 +143,9 @@ WP_CLI::log( sprintf( 'LANGUAGE DIAGNOSTICS  |  post_type=%s  |  AI=%s', $post_t
 WP_CLI::log( str_repeat( '=', 70 ) );
 
 // Statuses we consider "real" content (exclude revisions/auto-drafts/inherit).
-$real_statuses     = array( 'publish', 'future', 'draft', 'pending', 'private' );
-$real_status_in    = "'" . implode( "','", array_map( 'esc_sql', $real_statuses ) ) . "'";
-$post_type_escaped = esc_sql( $post_type );
+// The five "real" content statuses. The SQL below uses five literal %s
+// placeholders to match, bound via $wpdb->prepare(), so keep these in sync.
+$real_statuses = array( 'publish', 'future', 'draft', 'pending', 'private' );
 
 // ---- Prefetch: language slug per post id (one query) ----
 $lang_of  = array();
@@ -186,13 +186,16 @@ WP_CLI::log( '## 1. Counts per language (by post_status)' );
 WP_CLI::log( str_repeat( '-', 70 ) );
 
 $count_rows = $wpdb->get_results(
-	"SELECT t.slug AS slug, t.name AS name, p.post_status AS st, COUNT(*) AS n
-	 FROM {$wpdb->posts} p
-	 JOIN {$wpdb->term_relationships} tr ON tr.object_id = p.ID
-	 JOIN {$wpdb->term_taxonomy} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id AND tt.taxonomy = 'language'
-	 JOIN {$wpdb->terms} t ON t.term_id = tt.term_id
-	 WHERE p.post_type = '{$post_type_escaped}' AND p.post_status IN ( {$real_status_in} )
-	 GROUP BY t.slug, t.name, p.post_status"
+	$wpdb->prepare(
+		"SELECT t.slug AS slug, t.name AS name, p.post_status AS st, COUNT(*) AS n
+		 FROM {$wpdb->posts} p
+		 JOIN {$wpdb->term_relationships} tr ON tr.object_id = p.ID
+		 JOIN {$wpdb->term_taxonomy} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id AND tt.taxonomy = 'language'
+		 JOIN {$wpdb->terms} t ON t.term_id = tt.term_id
+		 WHERE p.post_type = %s AND p.post_status IN ( %s, %s, %s, %s, %s )
+		 GROUP BY t.slug, t.name, p.post_status",
+		array_merge( array( $post_type ), $real_statuses )
+	)
 );
 
 $by_lang = array(); // slug => [name, total, status=>n]
@@ -241,14 +244,20 @@ foreach ( $by_lang as $slug => $info ) {
 
 // Posts of this type with NO language term at all.
 $total_real = (int) $wpdb->get_var(
-	"SELECT COUNT(*) FROM {$wpdb->posts} p
-	 WHERE p.post_type = '{$post_type_escaped}' AND p.post_status IN ( {$real_status_in} )"
+	$wpdb->prepare(
+		"SELECT COUNT(*) FROM {$wpdb->posts} p
+		 WHERE p.post_type = %s AND p.post_status IN ( %s, %s, %s, %s, %s )",
+		array_merge( array( $post_type ), $real_statuses )
+	)
 );
-$with_lang  = (int) $wpdb->get_var(
-	"SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p
-	 JOIN {$wpdb->term_relationships} tr ON tr.object_id = p.ID
-	 JOIN {$wpdb->term_taxonomy} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id AND tt.taxonomy = 'language'
-	 WHERE p.post_type = '{$post_type_escaped}' AND p.post_status IN ( {$real_status_in} )"
+$with_lang = (int) $wpdb->get_var(
+	$wpdb->prepare(
+		"SELECT COUNT(DISTINCT p.ID) FROM {$wpdb->posts} p
+		 JOIN {$wpdb->term_relationships} tr ON tr.object_id = p.ID
+		 JOIN {$wpdb->term_taxonomy} tt ON tt.term_taxonomy_id = tr.term_taxonomy_id AND tt.taxonomy = 'language'
+		 WHERE p.post_type = %s AND p.post_status IN ( %s, %s, %s, %s, %s )",
+		array_merge( array( $post_type ), $real_statuses )
+	)
 );
 $no_lang = $total_real - $with_lang;
 
@@ -270,8 +279,11 @@ WP_CLI::log( str_repeat( '-', 70 ) );
 
 // All real post IDs of this type.
 $all_ids = $wpdb->get_col(
-	"SELECT p.ID FROM {$wpdb->posts} p
-	 WHERE p.post_type = '{$post_type_escaped}' AND p.post_status IN ( {$real_status_in} )"
+	$wpdb->prepare(
+		"SELECT p.ID FROM {$wpdb->posts} p
+		 WHERE p.post_type = %s AND p.post_status IN ( %s, %s, %s, %s, %s )",
+		array_merge( array( $post_type ), $real_statuses )
+	)
 );
 $all_ids   = array_map( 'intval', $all_ids );
 $id_exists = array_fill_keys( $all_ids, true );
@@ -378,8 +390,9 @@ $normalize_title = function ( $t ) {
 $title_buckets = array(); // key "lang\x1ftitle" => [ids]
 $chunks        = array_chunk( $all_ids, 500 );
 foreach ( $chunks as $chunk ) {
-	$in   = implode( ',', array_map( 'intval', $chunk ) );
-	$rows = $wpdb->get_results( "SELECT ID, post_title FROM {$wpdb->posts} WHERE ID IN ( {$in} )" );
+	$ph = implode( ', ', array_fill( 0, count( $chunk ), '%d' ) );
+	// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $ph is %d placeholders only; integer IDs bound via prepare().
+	$rows = $wpdb->get_results( $wpdb->prepare( "SELECT ID, post_title FROM {$wpdb->posts} WHERE ID IN ( {$ph} )", $chunk ) );
 	if ( ! $rows ) {
 		continue;
 	}
@@ -590,8 +603,9 @@ $script_mismatches = array(); // [pid, lang, detected, conf]
 $latin_mismatches  = array(); // [pid, lang, guess, score]
 $scanned           = 0;
 foreach ( $chunks as $chunk ) {
-	$in   = implode( ',', array_map( 'intval', $chunk ) );
-	$rows = $wpdb->get_results( "SELECT ID, post_title, post_content FROM {$wpdb->posts} WHERE ID IN ( {$in} )" );
+	$ph = implode( ', ', array_fill( 0, count( $chunk ), '%d' ) );
+	// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $ph is %d placeholders only; integer IDs bound via prepare().
+	$rows = $wpdb->get_results( $wpdb->prepare( "SELECT ID, post_title, post_content FROM {$wpdb->posts} WHERE ID IN ( {$ph} )", $chunk ) );
 	if ( ! $rows ) {
 		continue;
 	}
