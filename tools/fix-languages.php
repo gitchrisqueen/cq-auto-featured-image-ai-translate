@@ -37,6 +37,12 @@
  * MULTISITE: operates on ONE site; pass the numeric site (blog) ID or omit it
  * for the interactive picker.
  *
+ * NO POLYLANG API REQUIRED: Polylang frequently does not boot inside `wp eval-file`
+ * (its pll_* functions and the language/post_translations taxonomies are absent).
+ * This tool registers those taxonomies itself when needed and reads/writes
+ * Polylang's own storage directly, so re-tagging and relinking work regardless.
+ * It still uses the Polylang API when it IS available.
+ *
  * MODES (run in this order):
  *
  *   # 1. DETECT true language of every post and cache it to meta. Uses Unicode
@@ -149,13 +155,44 @@ WP_CLI::log( str_repeat( '=', 70 ) );
 WP_CLI::log( sprintf( 'FIX LANGUAGES  |  mode=%s  post_type=%s  AI=%s  keep=%s', strtoupper( $mode ), $post_type, $use_ai ? 'on' : 'off', implode( ',', array_keys( $keep_set ) ) ) );
 WP_CLI::log( str_repeat( '=', 70 ) );
 
-// ---- Polylang language slug resolution: base code => registered slug ----
-$registered = function_exists( 'pll_languages_list' ) ? (array) pll_languages_list() : array();
+// ---- Make sure Polylang's taxonomies are usable even when its plugin code did
+// NOT boot in this WP-CLI process (a common case: pll_* functions undefined and
+// the `language` / `post_translations` taxonomies unregistered). Registering them
+// here lets get_the_terms()/wp_set_object_terms() read and write Polylang's own
+// storage directly. The terms themselves already exist in the database.
+if ( ! taxonomy_exists( 'language' ) ) {
+	register_taxonomy(
+		'language',
+		array( 'post', 'page' ),
+		array( 'hierarchical' => false, 'public' => false, 'query_var' => false, 'rewrite' => false, 'show_ui' => false )
+	);
+}
+if ( ! taxonomy_exists( 'post_translations' ) ) {
+	register_taxonomy(
+		'post_translations',
+		array( 'post', 'page' ),
+		array( 'hierarchical' => false, 'public' => false, 'query_var' => false, 'rewrite' => false, 'show_ui' => false )
+	);
+}
+
+// ---- Language slug resolution from the actual `language` terms: base => slug
+// and slug => term_id. Built from the DB (not pll_languages_list) so it works
+// whether or not Polylang's API loaded. ----
 $base_to_slug = array();
-foreach ( $registered as $slug ) {
-	$b = strtolower( explode( '_', str_replace( '-', '_', (string) $slug ) )[0] );
-	if ( ! isset( $base_to_slug[ $b ] ) ) {
-		$base_to_slug[ $b ] = (string) $slug;
+$slug_to_term = array();
+$lang_terms   = get_terms(
+	array(
+		'taxonomy'   => 'language',
+		'hide_empty' => false,
+	)
+);
+if ( $lang_terms && ! is_wp_error( $lang_terms ) ) {
+	foreach ( $lang_terms as $lt ) {
+		$slug_to_term[ (string) $lt->slug ] = (int) $lt->term_id;
+		$b = strtolower( explode( '_', str_replace( '-', '_', (string) $lt->slug ) )[0] );
+		if ( ! isset( $base_to_slug[ $b ] ) ) {
+			$base_to_slug[ $b ] = (string) $lt->slug;
+		}
 	}
 }
 
@@ -174,6 +211,57 @@ $current_lang = function ( $pid ) {
 		}
 	}
 	return '';
+};
+
+// ---- Assign a post's language. Prefer Polylang's API; fall back to writing the
+// `language` term directly (works when Polylang's API did not load in CLI). ----
+$set_post_lang = function ( $pid, $slug ) use ( $slug_to_term ) {
+	$pid  = (int) $pid;
+	$slug = (string) $slug;
+	if ( function_exists( 'pll_set_post_language' ) ) {
+		pll_set_post_language( $pid, $slug );
+		return true;
+	}
+	if ( isset( $slug_to_term[ $slug ] ) ) {
+		wp_set_object_terms( $pid, array( (int) $slug_to_term[ $slug ] ), 'language', false );
+		clean_post_cache( $pid );
+		return true;
+	}
+	return false; // Unknown language slug and no API — cannot assign.
+};
+
+// ---- Save a translation group [slug => post_id]. Prefer Polylang's API; else
+// write the `post_translations` term directly in Polylang's own format: one
+// shared term whose description is the serialized [slug => id] map, assigned to
+// every member post. ----
+$save_translations = function ( array $assoc ) {
+	$assoc = array_filter( array_map( 'intval', $assoc ) );
+	if ( count( $assoc ) < 1 ) {
+		return;
+	}
+	if ( function_exists( 'pll_save_post_translations' ) ) {
+		pll_save_post_translations( $assoc );
+		return;
+	}
+	// Direct write. Polylang stores the group as a single post_translations term
+	// shared by all members; its description is maybe_serialize([slug => id]).
+	$name = 'pll_' . md5( implode( '_', $assoc ) );
+	$desc = maybe_serialize( $assoc );
+	$existing = term_exists( $name, 'post_translations' );
+	if ( $existing && ! is_wp_error( $existing ) ) {
+		$term_id = (int) $existing['term_id'];
+		wp_update_term( $term_id, 'post_translations', array( 'description' => $desc ) );
+	} else {
+		$created = wp_insert_term( $name, 'post_translations', array( 'description' => $desc ) );
+		if ( is_wp_error( $created ) ) {
+			return;
+		}
+		$term_id = (int) $created['term_id'];
+	}
+	foreach ( $assoc as $pid ) {
+		wp_set_object_terms( (int) $pid, array( $term_id ), 'post_translations', false );
+		clean_post_cache( (int) $pid );
+	}
 };
 
 $base_of = function ( $slug ) {
@@ -420,9 +508,7 @@ if ( 'undo' === $mode ) {
 	foreach ( $all_ids as $pid ) {
 		$orig = (string) get_post_meta( $pid, $meta_orig_lang, true );
 		if ( '' !== $orig ) {
-			if ( function_exists( 'pll_set_post_language' ) ) {
-				pll_set_post_language( $pid, $orig );
-			}
+			$set_post_lang( $pid, $orig );
 			delete_post_meta( $pid, $meta_orig_lang );
 			++$retag;
 		}
@@ -786,12 +872,10 @@ if ( 'plan' === $mode ) {
 if ( 'apply' === $mode ) {
 	$retagged = 0;
 	foreach ( $plan_retag as $pid => $ft ) {
-		if ( '' === (string) get_post_meta( $pid, $meta_orig_lang, true ) ) {
+		if ( '' !== (string) $ft[0] && '' === (string) get_post_meta( $pid, $meta_orig_lang, true ) ) {
 			update_post_meta( $pid, $meta_orig_lang, $ft[0] );
 		}
-		if ( function_exists( 'pll_set_post_language' ) ) {
-			pll_set_post_language( $pid, $ft[1] );
-		}
+		$set_post_lang( $pid, $ft[1] );
 		++$retagged;
 	}
 	$trashed = 0;
@@ -812,8 +896,8 @@ if ( 'apply' === $mode ) {
 // RELINK — rebuild Polylang translation groups from source meta
 // =====================================================================
 if ( 'relink' === $mode ) {
-	if ( ! function_exists( 'pll_save_post_translations' ) ) {
-		WP_CLI::error( 'Polylang functions unavailable; cannot relink.' );
+	if ( ! function_exists( 'pll_save_post_translations' ) && empty( $slug_to_term ) ) {
+		WP_CLI::error( 'Neither Polylang API nor any `language` terms are available; cannot relink.' );
 	}
 	// Re-read survivors (exclude trashed).
 	$live = get_posts(
@@ -855,7 +939,7 @@ if ( 'relink' === $mode ) {
 		foreach ( $members as $b => $info ) {
 			$assoc[ $info['slug'] ] = (int) $info['pid'];
 		}
-		pll_save_post_translations( $assoc );
+		$save_translations( $assoc );
 		++$linked;
 	}
 	WP_CLI::log( str_repeat( '-', 70 ) );
