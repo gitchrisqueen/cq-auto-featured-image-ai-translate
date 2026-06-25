@@ -85,6 +85,9 @@ final class CQ_Auto_Featured_Image_AI_Translate {
         add_action('wp_ajax_cq_afi_retry_background_errors', [__CLASS__, 'ajax_retry_background_errors']);
         add_action('wp_ajax_cq_afi_start_background_audit', [__CLASS__, 'ajax_start_background_audit']);
         add_action('wp_ajax_cq_afi_start_audit_and_repair', [__CLASS__, 'ajax_start_audit_and_repair']);
+        add_action('wp_ajax_cq_afi_pause_all', [__CLASS__, 'ajax_pause_all']);
+        add_action('wp_ajax_cq_afi_resume_all', [__CLASS__, 'ajax_resume_all']);
+        add_action('wp_ajax_cq_afi_cancel_all', [__CLASS__, 'ajax_cancel_all']);
         add_action('wp_ajax_cq_afi_pause_background_audit', [__CLASS__, 'ajax_pause_background_audit']);
         add_action('wp_ajax_cq_afi_resume_background_audit', [__CLASS__, 'ajax_resume_background_audit']);
         add_action('wp_ajax_cq_afi_cancel_background_audit', [__CLASS__, 'ajax_cancel_background_audit']);
@@ -460,138 +463,36 @@ final class CQ_Auto_Featured_Image_AI_Translate {
                 $.post(ajaxUrl, { action: 'cq_afi_clear_logs', nonce: nonce }, renderStatus);
             });
 
-            $('#cq-afi-run-full-repair-scan').on('click', function(e) {
-                e.preventDefault();
-                const btn = $(this);
-                btn.prop('disabled', true).text('Scanning...');
-                $.post(ajaxUrl, { action: 'cq_afi_run_full_repair_scan', nonce: nonce }, function(data) {
-                    renderStatus(data);
-                    btn.prop('disabled', false).text('Run Full Library Scan');
-                    alert('Full library scan completed. Review the report, then process the repair queue.');
-                });
-            });
-
-            $('#cq-afi-process-repair-queue').on('click', function(e) {
-                e.preventDefault();
-                const btn = $(this);
-                btn.prop('disabled', true).text('Processing...');
-                function step() {
-                    $.post(ajaxUrl, { action: 'cq_afi_process_repair_queue', nonce: nonce }, function(data) {
-                        renderStatus(data);
-                        if (data && data.data && data.data.repair_report && data.data.repair_report.queue_remaining > 0) {
-                            step();
-                        } else {
-                            btn.prop('disabled', false).text('Process Repair Queue');
-                            alert('Repair queue processing completed or paused. Review the dashboard and logs.');
-                        }
-                    }).fail(function() {
-                        btn.prop('disabled', false).text('Process Repair Queue');
-                        alert('Repair queue request failed. Check logs/server error log.');
-                    });
-                }
-                step();
-            });
-
-            $('#cq-afi-start-background-audit').on('click', function(e) {
-                e.preventDefault();
-                $.post(ajaxUrl, { action: 'cq_afi_start_background_audit', nonce: nonce }, function(data) {
-                    renderStatus(data);
-                    alert('Background audit started. You may leave this page.');
-                });
-            });
-
             $('#cq-afi-start-audit-and-repair').on('click', function(e) {
                 e.preventDefault();
                 $.post(ajaxUrl, { action: 'cq_afi_start_audit_and_repair', nonce: nonce }, function(data) {
                     renderStatus(data);
-                    alert('Background audit started. Repairs will start automatically when the audit completes.');
+                    alert('Audit started. Featured images, translation relinks, and missing translations will be repaired automatically when the audit completes. You may leave this page.');
                 });
             });
 
-            $('#cq-afi-pause-background-audit').on('click', function(e) {
+            $('#cq-afi-pause-all').on('click', function(e) {
                 e.preventDefault();
-                $.post(ajaxUrl, { action: 'cq_afi_pause_background_audit', nonce: nonce }, function(data) {
+                $.post(ajaxUrl, { action: 'cq_afi_pause_all', nonce: nonce }, function(data) {
                     renderStatus(data);
-                    alert('Background audit paused.');
+                    alert('Paused.');
                 });
             });
 
-            $('#cq-afi-resume-background-audit').on('click', function(e) {
+            $('#cq-afi-resume-all').on('click', function(e) {
                 e.preventDefault();
-                $.post(ajaxUrl, { action: 'cq_afi_resume_background_audit', nonce: nonce }, function(data) {
+                $.post(ajaxUrl, { action: 'cq_afi_resume_all', nonce: nonce }, function(data) {
                     renderStatus(data);
-                    alert('Background audit resumed.');
+                    alert('Resumed.');
                 });
             });
 
-            $('#cq-afi-cancel-background-audit').on('click', function(e) {
+            $('#cq-afi-cancel-all').on('click', function(e) {
                 e.preventDefault();
-                if (!confirm('Cancel the background audit? Current audit progress will stop.')) return;
-                $.post(ajaxUrl, { action: 'cq_afi_cancel_background_audit', nonce: nonce }, function(data) {
+                if (!confirm('Cancel the running audit and repair? Remaining queued repair items will be cleared.')) return;
+                $.post(ajaxUrl, { action: 'cq_afi_cancel_all', nonce: nonce }, function(data) {
                     renderStatus(data);
-                    alert('Background audit cancelled.');
-                });
-            });
-
-            $('#cq-afi-kick-background-audit').on('click', function(e) {
-                e.preventDefault();
-                $.post(ajaxUrl, { action: 'cq_afi_kick_background_audit', nonce: nonce }, function(data) {
-                    renderStatus(data);
-                    alert('Audit worker has been requeued and kicked.');
-                });
-            });
-
-            $('#cq-afi-process-audit-batch-now').on('click', function(e) {
-                e.preventDefault();
-                $.post(ajaxUrl, { action: 'cq_afi_process_audit_batch_now', nonce: nonce }, function(data) {
-                    renderStatus(data);
-                    alert('One audit batch was processed in the browser.');
-                });
-            });
-
-            $('#cq-afi-restore-translation-dates').on('click', function(e) {
-                e.preventDefault();
-                if (!confirm('Restore translated post publish dates from their source-language posts?')) return;
-                $.post(ajaxUrl, { action: 'cq_afi_restore_translation_dates', nonce: nonce }, function(data) {
-                    renderStatus(data);
-                    if (data && data.data && data.data.date_restore_message) {
-                        alert(data.data.date_restore_message);
-                    } else {
-                        alert('Date restore completed. Check logs for details.');
-                    }
-                });
-            });
-
-            $('#cq-afi-start-background-repair').on('click', function(e) {
-                e.preventDefault();
-                $.post(ajaxUrl, { action: 'cq_afi_start_background_repair', nonce: nonce }, function(data) {
-                    renderStatus(data);
-                    alert('Background repair started. You may leave this page.');
-                });
-            });
-
-            $('#cq-afi-pause-background-repair').on('click', function(e) {
-                e.preventDefault();
-                $.post(ajaxUrl, { action: 'cq_afi_pause_background_repair', nonce: nonce }, function(data) {
-                    renderStatus(data);
-                    alert('Background repair paused.');
-                });
-            });
-
-            $('#cq-afi-resume-background-repair').on('click', function(e) {
-                e.preventDefault();
-                $.post(ajaxUrl, { action: 'cq_afi_resume_background_repair', nonce: nonce }, function(data) {
-                    renderStatus(data);
-                    alert('Background repair resumed.');
-                });
-            });
-
-            $('#cq-afi-cancel-background-repair').on('click', function(e) {
-                e.preventDefault();
-                if (!confirm('Cancel the background repair queue? This will clear remaining queued repair items.')) return;
-                $.post(ajaxUrl, { action: 'cq_afi_cancel_background_repair', nonce: nonce }, function(data) {
-                    renderStatus(data);
-                    alert('Background repair cancelled.');
+                    alert('Cancelled.');
                 });
             });
 
@@ -732,33 +633,23 @@ final class CQ_Auto_Featured_Image_AI_Translate {
 
             <h2>Full Content Library Repair</h2>
             <p class="cq-afi-muted">
-                This scans the entire content library, not just newly published posts. It finds missing/invalid featured images,
-                translation groups missing images, unlinked non-source-language posts, source posts with no translated alternative,
-                and items requiring manual review.
+                This scans the entire content library (not just newly published posts) and, in one pass, sets missing/invalid
+                featured images, relinks language versions that lost their Polylang association, and creates any genuinely
+                missing translations. Existing translations are relinked &mdash; never duplicated &mdash; using both the
+                Polylang relationship and the plugin&rsquo;s own source-post record.
             </p>
             <p>
-                <button class="button button-primary" id="cq-afi-start-audit-and-repair">Run Background Audit & Repair</button>
-                <button class="button" id="cq-afi-start-background-audit">Start Background Audit Only</button>
-                <button class="button" id="cq-afi-pause-background-audit">Pause Audit</button>
-                <button class="button" id="cq-afi-resume-background-audit">Resume Audit</button>
-                <button class="button" id="cq-afi-cancel-background-audit">Cancel Audit</button>
-                <button class="button" id="cq-afi-kick-background-audit">Kick/Requeue Audit Worker</button>
-                <button class="button" id="cq-afi-process-audit-batch-now">Process One Small Audit Batch Now</button>
-                <button class="button" id="cq-afi-run-full-repair-scan">Run Full Library Scan in Browser</button>
-                <button class="button" id="cq-afi-process-repair-queue">Process Repair Queue in Browser</button>
-                <button class="button button-primary" id="cq-afi-start-background-repair">Start Background Repair Only</button>
-                <button class="button" id="cq-afi-pause-background-repair">Pause</button>
-                <button class="button" id="cq-afi-resume-background-repair">Resume</button>
+                <button class="button button-primary" id="cq-afi-start-audit-and-repair">Run Audit &amp; Repair</button>
+                <button class="button" id="cq-afi-pause-all">Pause</button>
+                <button class="button" id="cq-afi-resume-all">Resume</button>
+                <button class="button" id="cq-afi-cancel-all">Cancel</button>
                 <button class="button" id="cq-afi-retry-background-errors">Retry Errors</button>
-                <button class="button" id="cq-afi-cancel-background-repair">Cancel Queue</button>
-                <button class="button" id="cq-afi-restore-translation-dates">Restore Translation Publish Dates</button>
             </p>
-
-            <form method="post" style="margin: 8px 0 18px;">
-                <?php wp_nonce_field('cq_afi_emergency_audit_batch_action', 'cq_afi_emergency_audit_batch_nonce'); ?>
-                <button class="button" name="cq_afi_emergency_audit_batch_submit" value="1">Emergency Non-AJAX Audit Batch</button>
-                <span class="cq-afi-muted">Use this if admin-ajax or Action Scheduler is not executing the audit worker.</span>
-            </form>
+            <p class="cq-afi-muted">
+                Runs in the background; you can leave this page. Pause/Resume/Cancel act on whichever phase
+                (audit or repair) is currently running. After this completes, run the WP-CLI
+                <code>tools/reorder-post-dates.php</code> tool to order posts by ID with translation groups sharing a date.
+            </p>
 
             <div id="cq-afi-audit-status-wrap">
                 <?php echo wp_kses_post(self::render_audit_status()); ?>
@@ -1031,6 +922,28 @@ final class CQ_Auto_Featured_Image_AI_Translate {
     public static function ajax_start_audit_and_repair(): void {
         self::verify_ajax();
         self::start_background_audit(true);
+        wp_send_json_success(self::status_payload());
+    }
+
+    // Combined controls: act on whichever phase (audit or repair) is currently running.
+    public static function ajax_pause_all(): void {
+        self::verify_ajax();
+        self::pause_background_audit();
+        self::pause_background_repair();
+        wp_send_json_success(self::status_payload());
+    }
+
+    public static function ajax_resume_all(): void {
+        self::verify_ajax();
+        self::resume_background_audit();
+        self::resume_background_repair();
+        wp_send_json_success(self::status_payload());
+    }
+
+    public static function ajax_cancel_all(): void {
+        self::verify_ajax();
+        self::cancel_background_audit();
+        self::cancel_background_repair();
         wp_send_json_success(self::status_payload());
     }
 
@@ -1848,14 +1761,18 @@ final class CQ_Auto_Featured_Image_AI_Translate {
 
             if (!$source_id) {
                 $agg['broken_translation_links']++;
-                $match = self::find_source_candidate_for_unlinked_translation($post_id);
+                $match = self::resolve_unlinked_translation_source($post_id, $source_lang);
 
-                if (!empty($match['post_id']) && (float) $match['score'] >= 80 && empty($match['ambiguous'])) {
+                // Authoritative meta is always trusted; a heuristic match must be strong and unambiguous.
+                $confident = !empty($match['post_id'])
+                    && ((($match['via'] ?? '') === 'meta') || ((float) $match['score'] >= 80 && empty($match['ambiguous'])));
+
+                if ($confident) {
                     $items[] = [
                         'type' => 'broken_translation_link',
                         'post_id' => $post_id,
                         'lang' => $lang,
-                        'message' => 'Unlinked translation has clear source candidate #' . (int) $match['post_id'] . ' with score ' . (float) $match['score'] . '.',
+                        'message' => 'Unlinked translation will be relinked to source #' . (int) $match['post_id'] . ' (' . ($match['reason'] ?? '') . ').',
                         'action' => 'repair_translation_link',
                     ];
 
@@ -1871,7 +1788,7 @@ final class CQ_Auto_Featured_Image_AI_Translate {
                         'type' => 'manual_review',
                         'post_id' => $post_id,
                         'lang' => $lang,
-                        'message' => 'Unlinked translation has no clear source-language candidate.',
+                        'message' => 'Unlinked translation has no authoritative source meta and no clear source-language candidate.',
                         'action' => 'manual_review',
                     ];
                 }
@@ -1880,7 +1797,10 @@ final class CQ_Auto_Featured_Image_AI_Translate {
 
         if (self::polylang_available() && $is_source && $languages && count($languages) > 1) {
             $map = self::get_existing_translation_map($post_id, $source_lang, $languages);
+            $orphans = self::get_orphan_translations_for_source($post_id, $source_lang);
             $has_alt = false;
+            $missing_any = false;
+            $relinkable = false;
 
             foreach ($languages as $target_lang) {
                 if ($target_lang === $source_lang) {
@@ -1888,19 +1808,33 @@ final class CQ_Auto_Featured_Image_AI_Translate {
                 }
 
                 if (!empty($map[$target_lang])) {
-                    $has_alt = true;
-                } else {
-                    $agg['total_missing_language_versions']++;
+                    $has_alt = true; // Already linked in Polylang.
+                    continue;
+                }
+
+                // Not linked: it is missing unless an orphaned translation can be relinked.
+                $agg['total_missing_language_versions']++;
+                $missing_any = true;
+                if (!empty($orphans[$target_lang])) {
+                    $has_alt = true; // An alternative exists, just not linked yet.
+                    $relinkable = true;
                 }
             }
 
             if (!$has_alt) {
                 $agg['source_posts_without_any_translation']++;
+            }
+
+            // Queue one fill pass whenever any language is missing or merely unlinked.
+            // translate_post_if_needed() will relink orphans first, then create the rest.
+            if ($missing_any) {
                 $items[] = [
                     'type' => 'source_without_translation',
                     'post_id' => $post_id,
                     'lang' => $source_lang,
-                    'message' => 'Source post has no translated alternatives.',
+                    'message' => $relinkable
+                        ? 'Source post has unlinked/missing language versions (some can be relinked).'
+                        : 'Source post is missing one or more language versions.',
                     'action' => 'repair_missing_translation',
                 ];
                 $queue[] = [
@@ -2391,14 +2325,17 @@ final class CQ_Auto_Featured_Image_AI_Translate {
                 $source_id = pll_get_post($post_id, $source_lang);
                 if (!$source_id) {
                     $broken_translation_links++;
-                    $match = self::find_source_candidate_for_unlinked_translation($post_id);
+                    $match = self::resolve_unlinked_translation_source($post_id, $source_lang);
 
-                    if (!empty($match['post_id']) && (float) $match['score'] >= 80 && empty($match['ambiguous'])) {
+                    $confident = !empty($match['post_id'])
+                        && ((($match['via'] ?? '') === 'meta') || ((float) $match['score'] >= 80 && empty($match['ambiguous'])));
+
+                    if ($confident) {
                         $items[] = [
                             'type' => 'broken_translation_link',
                             'post_id' => $post_id,
                             'lang' => $lang,
-                            'message' => 'Unlinked translation has clear source candidate #' . (int) $match['post_id'] . ' with score ' . (float) $match['score'] . '.',
+                            'message' => 'Unlinked translation will be relinked to source #' . (int) $match['post_id'] . ' (' . ($match['reason'] ?? '') . ').',
                             'action' => 'repair_translation_link',
                         ];
 
@@ -2414,7 +2351,7 @@ final class CQ_Auto_Featured_Image_AI_Translate {
                             'type' => 'manual_review',
                             'post_id' => $post_id,
                             'lang' => $lang,
-                            'message' => 'Unlinked translation has no clear source-language candidate.',
+                            'message' => 'Unlinked translation has no authoritative source meta and no clear source-language candidate.',
                             'action' => 'manual_review',
                         ];
                     }
@@ -2569,6 +2506,7 @@ final class CQ_Auto_Featured_Image_AI_Translate {
             } elseif ($type === 'repair_missing_translation') {
                 $res = self::translate_post_if_needed($post_id);
                 $report_updates['created_translations'] += (int) ($res['translations_created'] ?? 0);
+                $report_updates['fixed_links'] += (int) ($res['translations_linked'] ?? 0);
                 $report_updates['errors'] += (int) ($res['errors'] ?? 0);
                 $report_updates['skipped'] += (int) ($res['skipped'] ?? 0) + (int) ($res['translation_failed'] ?? 0);
                 $had_error = !empty($res['errors']);
@@ -3759,6 +3697,7 @@ final class CQ_Auto_Featured_Image_AI_Translate {
     public static function translate_post_if_needed(int $source_post_id): array {
         $result = [
             'translations_created' => 0,
+            'translations_linked' => 0,
             'translation_failed' => 0,
             'skipped' => 0,
             'errors' => 0,
@@ -3779,9 +3718,22 @@ final class CQ_Auto_Featured_Image_AI_Translate {
             self::log('info', 'Source language was missing and has been set.', $source_post_id, ['source_lang' => $source_lang]);
         }
 
+        // If the post is itself a non-source-language post, redirect the work to its
+        // real source (via authoritative meta or Polylang) so the whole group is filled.
         if ($current_lang !== $source_lang) {
+            $resolved = self::resolve_unlinked_translation_source($source_post_id, $source_lang);
+            $linked_source = pll_get_post($source_post_id, $source_lang);
+            $real_source = $linked_source ? (int) $linked_source : (int) ($resolved['post_id'] ?? 0);
+
+            if ($real_source && $real_source !== $source_post_id) {
+                self::log('info', 'Translation request redirected from a translation post to its source.', $source_post_id, [
+                    'source_post_id' => $real_source,
+                ]);
+                return self::translate_post_if_needed($real_source);
+            }
+
             $result['skipped'] = 1;
-            self::log('info', 'Translation skipped because post is not in the configured source language.', $source_post_id, [
+            self::log('info', 'Translation skipped because post is not in the configured source language and no source could be resolved.', $source_post_id, [
                 'post_lang' => $current_lang,
                 'source_lang' => $source_lang,
             ]);
@@ -3799,54 +3751,73 @@ final class CQ_Auto_Featured_Image_AI_Translate {
             return $result;
         }
 
+        // Build the picture from BOTH signals: Polylang's own links AND any orphaned
+        // translations that still carry this post's ID in _cq_afi_source_post_id.
         $translation_map = self::get_existing_translation_map($source_post_id, $source_lang, $languages);
         $translation_map[$source_lang] = $source_post_id;
+        $orphans = self::get_orphan_translations_for_source($source_post_id, $source_lang);
 
-        foreach ($languages as $lang) {
-            if ($lang !== $source_lang && !empty($translation_map[$lang])) {
-                self::log('info', 'Post already has at least one translated alternative. Translation job skipped.', $source_post_id, [
-                    'existing_language' => $lang,
-                    'translated_post_id' => (int) $translation_map[$lang],
-                ]);
-                return $result;
-            }
-        }
-
-        // Requirement: automation only needs to ensure there is more than English.
-        // It will try missing languages in configured order until one succeeds.
         $last_error = '';
+        $any_failure = false;
 
+        // Fill EVERY missing language: link an existing orphan if one exists, otherwise create.
         foreach ($languages as $target_lang) {
             if ($target_lang === $source_lang || !empty($translation_map[$target_lang])) {
-                continue;
+                continue; // Source language, or already linked in Polylang.
+            }
+
+            // Prefer relinking an existing orphaned translation over creating a duplicate.
+            if (!empty($orphans[$target_lang])) {
+                $orphan_id = (int) $orphans[$target_lang];
+                if (self::repair_translation_link($orphan_id, $source_post_id)) {
+                    $translation_map[$target_lang] = $orphan_id;
+                    $result['translations_linked']++;
+                    self::log('info', 'Existing orphaned translation relinked to its source instead of recreating it.', $source_post_id, [
+                        'target_lang' => $target_lang,
+                        'translated_post_id' => $orphan_id,
+                    ]);
+                    continue;
+                }
+                // Relink failed (e.g. a conflicting post already holds this language); fall through to create.
+                self::log('warning', 'Could not relink an orphaned translation; will attempt to create one.', $source_post_id, [
+                    'target_lang' => $target_lang,
+                    'orphan_post_id' => $orphan_id,
+                ]);
             }
 
             $new_post_id = self::create_translation($source_post_id, $source_lang, $target_lang, $translation_map);
 
             if ($new_post_id) {
-                delete_post_meta($source_post_id, self::META_TRANSLATION_FAILED);
-                delete_post_meta($source_post_id, self::META_TRANSLATION_FAILED_REASON);
-
                 $translation_map[$target_lang] = $new_post_id;
                 pll_save_post_translations($translation_map);
-
-                $result['translations_created'] = 1;
+                $result['translations_created']++;
                 self::log('info', 'Translation created and associated with source post.', $source_post_id, [
                     'target_lang' => $target_lang,
                     'translated_post_id' => $new_post_id,
                 ]);
-                return $result;
+                continue;
             }
 
+            $any_failure = true;
             $last_error = 'Translation failed for target language "' . $target_lang . '".';
             self::log('error', $last_error, $source_post_id, ['target_lang' => $target_lang]);
         }
 
-        update_post_meta($source_post_id, self::META_TRANSLATION_FAILED, current_time('mysql'));
-        update_post_meta($source_post_id, self::META_TRANSLATION_FAILED_REASON, $last_error ?: 'No translation could be created.');
+        if ($result['translations_created'] > 0 || $result['translations_linked'] > 0) {
+            delete_post_meta($source_post_id, self::META_TRANSLATION_FAILED);
+            delete_post_meta($source_post_id, self::META_TRANSLATION_FAILED_REASON);
+        }
 
-        $result['translation_failed'] = 1;
-        $result['errors'] = 1;
+        if ($any_failure) {
+            update_post_meta($source_post_id, self::META_TRANSLATION_FAILED, current_time('mysql'));
+            update_post_meta($source_post_id, self::META_TRANSLATION_FAILED_REASON, $last_error ?: 'One or more translations could not be created.');
+            $result['translation_failed'] = 1;
+            $result['errors'] = 1;
+        }
+
+        if ($result['translations_created'] === 0 && $result['translations_linked'] === 0 && !$any_failure) {
+            $result['skipped'] = 1;
+        }
 
         return $result;
     }
@@ -4047,6 +4018,103 @@ final class CQ_Auto_Featured_Image_AI_Translate {
         }
 
         return $map;
+    }
+
+    /**
+     * Find posts that claim this source via the authoritative META_SOURCE_POST meta,
+     * even when Polylang's own translation link is missing/broken. Returns a
+     * [language_slug => post_id] map of those orphaned translations. When several
+     * posts claim the same source for the same language, the lowest post ID wins
+     * (the earliest-created, most likely the genuine translation).
+     */
+    private static function get_orphan_translations_for_source(int $source_post_id, string $source_lang): array {
+        if (!$source_post_id) {
+            return [];
+        }
+
+        $claimers = get_posts([
+            'post_type'        => 'post',
+            'post_status'      => 'any',
+            'posts_per_page'   => -1,
+            'fields'           => 'ids',
+            'orderby'          => 'ID',
+            'order'            => 'ASC',
+            'suppress_filters' => true,
+            'meta_query'       => [
+                [
+                    'key'   => self::META_SOURCE_POST,
+                    'value' => $source_post_id,
+                ],
+            ],
+        ]);
+
+        $orphans = [];
+        foreach ($claimers as $cid) {
+            $cid = (int) $cid;
+            if ($cid === $source_post_id) {
+                continue;
+            }
+            $lang = self::polylang_available() ? pll_get_post_language($cid) : '';
+            if (!$lang || $lang === $source_lang) {
+                continue; // No language, or mislabeled as the source language.
+            }
+            if (empty($orphans[$lang])) {
+                $orphans[$lang] = $cid;
+            }
+        }
+
+        return $orphans;
+    }
+
+    /**
+     * Resolve the source-language post for an unlinked translation, preferring the
+     * authoritative META_SOURCE_POST meta (which this plugin writes on every
+     * translation it creates and which survives even when Polylang's links break)
+     * and only falling back to fuzzy title/slug matching when no valid meta exists.
+     *
+     * Returns ['post_id'=>int, 'score'=>float, 'reason'=>string, 'ambiguous'=>bool, 'via'=>string]
+     * or an empty array when no candidate is found.
+     */
+    private static function resolve_unlinked_translation_source(int $post_id, string $source_lang): array {
+        // 1) Authoritative link written at translation time.
+        $claimed = (int) get_post_meta($post_id, self::META_SOURCE_POST, true);
+        if ($claimed > 0 && $claimed !== $post_id) {
+            $claimed_post = get_post($claimed);
+            $claimed_valid = $claimed_post
+                && $claimed_post->post_type === 'post'
+                && (!self::polylang_available() || pll_get_post_language($claimed) === $source_lang);
+            if ($claimed_valid) {
+                return [
+                    'post_id'   => $claimed,
+                    'score'     => 100.0,
+                    'reason'    => 'authoritative source meta (_cq_afi_source_post_id)',
+                    'ambiguous' => false,
+                    'via'       => 'meta',
+                ];
+            }
+        }
+
+        // 2) Heuristic title/slug fallback.
+        $lang = self::polylang_available() ? pll_get_post_language($post_id) : '';
+        if (!$lang || $lang === $source_lang) {
+            return [];
+        }
+
+        $candidates = self::find_source_post_candidates_for_unlinked_translation($post_id, $lang, $source_lang);
+        if (!$candidates) {
+            return [];
+        }
+
+        $best      = $candidates[0];
+        $ambiguous = isset($candidates[1]) && ((float) $best['score'] - (float) $candidates[1]['score']) < 12;
+
+        return [
+            'post_id'   => (int) $best['post_id'],
+            'score'     => (float) $best['score'],
+            'reason'    => (string) ($best['reason'] ?? 'title/slug similarity'),
+            'ambiguous' => $ambiguous,
+            'via'       => 'heuristic',
+        ];
     }
 
     public static function create_translation(int $source_post_id, string $source_lang, string $target_lang, array $translation_map): int {
