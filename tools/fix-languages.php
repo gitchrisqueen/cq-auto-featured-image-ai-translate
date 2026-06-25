@@ -102,11 +102,11 @@ foreach ( $argv_in as $raw ) {
 }
 
 // Meta keys used by this tool.
-$META_TRUE      = '_cq_afi_true_lang';
-$META_TRUE_VIA  = '_cq_afi_true_lang_via';
-$META_SOURCE    = '_cq_afi_source_post_id';
-$META_ORIG_LANG = '_cq_afi_fixlang_orig_lang';
-$META_TRASHED   = '_cq_afi_fixlang_trashed';
+$meta_true      = '_cq_afi_true_lang';
+$meta_true_via  = '_cq_afi_true_lang_via';
+$meta_source    = '_cq_afi_source_post_id';
+$meta_orig_lang = '_cq_afi_fixlang_orig_lang';
+$meta_trashed   = '_cq_afi_fixlang_trashed';
 
 // Languages to KEEP (base ISO codes). Everything else is an "extra" -> trashed.
 $keep_bases = array( 'en', 'pt', 'zh', 'ja', 'es', 'de', 'fr', 'ar', 'hi', 'ru', 'tr' );
@@ -382,7 +382,7 @@ if ( 'undo' === $mode ) {
 			'post_status'      => 'trash',
 			'posts_per_page'   => -1,
 			'fields'           => 'ids',
-			'meta_key'         => $META_TRASHED,
+			'meta_key'         => $meta_trashed,
 			'meta_value'       => '1',
 			'suppress_filters' => true,
 		)
@@ -390,18 +390,18 @@ if ( 'undo' === $mode ) {
 	$untrashed = 0;
 	foreach ( $trashed as $pid ) {
 		wp_untrash_post( (int) $pid );
-		delete_post_meta( (int) $pid, $META_TRASHED );
+		delete_post_meta( (int) $pid, $meta_trashed );
 		++$untrashed;
 	}
 	// Restore original language tags.
 	$retag = 0;
 	foreach ( $all_ids as $pid ) {
-		$orig = (string) get_post_meta( $pid, $META_ORIG_LANG, true );
+		$orig = (string) get_post_meta( $pid, $meta_orig_lang, true );
 		if ( '' !== $orig ) {
 			if ( function_exists( 'pll_set_post_language' ) ) {
 				pll_set_post_language( $pid, $orig );
 			}
-			delete_post_meta( $pid, $META_ORIG_LANG );
+			delete_post_meta( $pid, $meta_orig_lang );
 			++$retag;
 		}
 	}
@@ -425,7 +425,7 @@ if ( 'detect' === $mode ) {
 			break;
 		}
 		// Skip if already cached (resumable).
-		$cached = (string) get_post_meta( $pid, $META_TRUE, true );
+		$cached = (string) get_post_meta( $pid, $meta_true, true );
 		if ( '' !== $cached ) {
 			++$skipped;
 			$dist[ $cached ] = isset( $dist[ $cached ] ) ? $dist[ $cached ] + 1 : 1;
@@ -461,8 +461,8 @@ if ( 'detect' === $mode ) {
 			$true = 'und'; // Undetermined; plan will leave these alone.
 			$via  = 'none';
 		}
-		update_post_meta( $pid, $META_TRUE, $true );
-		update_post_meta( $pid, $META_TRUE_VIA, $via );
+		update_post_meta( $pid, $meta_true, $true );
+		update_post_meta( $pid, $meta_true_via, $via );
 		$dist[ $true ] = isset( $dist[ $true ] ) ? $dist[ $true ] + 1 : 1;
 		++$done;
 		if ( 0 === $done % 250 ) {
@@ -501,13 +501,13 @@ $status_of = array();
 $len_of    = array();
 $missing_detect = 0;
 foreach ( $all_ids as $pid ) {
-	$t = (string) get_post_meta( $pid, $META_TRUE, true );
+	$t = (string) get_post_meta( $pid, $meta_true, true );
 	if ( '' === $t ) {
 		++$missing_detect;
 		$t = 'und';
 	}
 	$true_of[ $pid ]   = $t;
-	$src_of[ $pid ]    = (int) get_post_meta( $pid, $META_SOURCE, true );
+	$src_of[ $pid ]    = (int) get_post_meta( $pid, $meta_source, true );
 	$tag_of[ $pid ]    = $current_lang( $pid );
 	$p                 = get_post( $pid );
 	$title_of[ $pid ]  = $p ? $p->post_title : '';
@@ -716,8 +716,8 @@ if ( 'plan' === $mode ) {
 if ( 'apply' === $mode ) {
 	$retagged = 0;
 	foreach ( $plan_retag as $pid => $ft ) {
-		if ( '' === (string) get_post_meta( $pid, $META_ORIG_LANG, true ) ) {
-			update_post_meta( $pid, $META_ORIG_LANG, $ft[0] );
+		if ( '' === (string) get_post_meta( $pid, $meta_orig_lang, true ) ) {
+			update_post_meta( $pid, $meta_orig_lang, $ft[0] );
 		}
 		if ( function_exists( 'pll_set_post_language' ) ) {
 			pll_set_post_language( $pid, $ft[1] );
@@ -726,7 +726,7 @@ if ( 'apply' === $mode ) {
 	}
 	$trashed = 0;
 	foreach ( array_merge( array_keys( $plan_trash_extra ), array_keys( $plan_trash_dupe ) ) as $pid ) {
-		update_post_meta( $pid, $META_TRASHED, '1' );
+		update_post_meta( $pid, $meta_trashed, '1' );
 		wp_trash_post( (int) $pid );
 		++$trashed;
 	}
@@ -759,7 +759,7 @@ if ( 'relink' === $mode ) {
 	$live_set  = array_fill_keys( $live, true );
 	$src_live  = array();
 	foreach ( $live as $pid ) {
-		$src_live[ $pid ] = (int) get_post_meta( $pid, $META_SOURCE, true );
+		$src_live[ $pid ] = (int) get_post_meta( $pid, $meta_source, true );
 	}
 	// Build group: root => [ base => pid ] using current (now-corrected) language.
 	$grp = array();
