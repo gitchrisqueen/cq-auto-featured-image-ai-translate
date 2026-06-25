@@ -16,19 +16,29 @@
  * changed. Because consecutive posts are spaced a full day apart, the ordering
  * is unambiguous regardless of the time component.
  *
- * Run with WP-CLI (e.g. over SSH on SiteGround), from the WordPress root:
+ * MULTISITE: on a multisite network this operates on ONE site at a time. Pass
+ * the numeric site (blog) ID as an argument, or omit it to get an interactive
+ * list of sites to choose from. On a single-site install the site argument is
+ * ignored.
  *
- *   # 1. DRY RUN — shows what would change, writes nothing (default):
+ * Run with WP-CLI (e.g. over SSH on SiteGround), from the WordPress root.
+ * Arguments are order-independent: a keyword (apply/undo) sets the mode, a number
+ * selects the site, anything else is treated as the post type.
+ *
+ *   # 1. DRY RUN — shows what would change, writes nothing (default).
+ *   #    On multisite with no site number, it lists the sites and prompts:
  *   wp eval-file wp-content/plugins/cq-auto-featured-image-ai-translate/tools/reorder-post-dates.php
  *
- *   # 2. APPLY — rewrite the dates (a rollback copy is saved first):
- *   wp eval-file wp-content/plugins/cq-auto-featured-image-ai-translate/tools/reorder-post-dates.php apply
+ *   # 2. DRY RUN on a specific site (e.g. site ID 2):
+ *   wp eval-file wp-content/plugins/cq-auto-featured-image-ai-translate/tools/reorder-post-dates.php 2
  *
- *   # 3. UNDO — revert the last apply from the rollback copy:
- *   wp eval-file wp-content/plugins/cq-auto-featured-image-ai-translate/tools/reorder-post-dates.php undo
+ *   # 3. APPLY on site 2 (a rollback copy is saved first):
+ *   wp eval-file wp-content/plugins/cq-auto-featured-image-ai-translate/tools/reorder-post-dates.php apply 2
  *
- * Optional second argument restricts to a post type other than the default
- * 'post', e.g. `... apply page`.
+ *   # 4. UNDO on site 2 (revert the last apply from the rollback copy):
+ *   wp eval-file wp-content/plugins/cq-auto-featured-image-ai-translate/tools/reorder-post-dates.php undo 2
+ *
+ * Optionally pass a post type other than the default 'post', e.g. `... apply 2 page`.
  *
  * IMPORTANT: take a database backup before running with `apply`. Every targeted
  * post's current date is saved to post meta first, so `undo` can restore it, but
@@ -42,22 +52,76 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 if ( ! defined( 'WP_CLI' ) || ! WP_CLI ) {
-	echo "This script must be run with WP-CLI: wp eval-file <path-to-this-file> [apply|undo] [post_type]\n";
+	echo "This script must be run with WP-CLI: wp eval-file <path-to-this-file> [apply|undo] [site_id] [post_type]\n";
 	return;
 }
 
 // This is a WP-CLI `eval-file` script that runs in the global scope by design,
 // so its working variables are top-level locals rather than function-scoped.
 // phpcs:disable WordPress.WP.GlobalVariablesOverride.Prohibited
+
+// Parse arguments order-independently: keyword => mode, number => site, else => post type.
 $argv_in   = isset( $args ) && is_array( $args ) ? $args : array();
-$mode      = isset( $argv_in[0] ) ? strtolower( (string) $argv_in[0] ) : 'dry';
-$post_type = isset( $argv_in[1] ) ? sanitize_key( (string) $argv_in[1] ) : 'post';
+$mode      = 'dry';
+$site_id   = 0;
+$post_type = 'post';
+foreach ( $argv_in as $raw ) {
+	$arg = strtolower( trim( (string) $raw ) );
+	if ( '' === $arg ) {
+		continue;
+	}
+	if ( in_array( $arg, array( 'apply', 'undo', 'dry' ), true ) ) {
+		$mode = $arg;
+	} elseif ( ctype_digit( $arg ) ) {
+		$site_id = (int) $arg;
+	} else {
+		$post_type = sanitize_key( $arg );
+	}
+}
 
 $apply = ( 'apply' === $mode );
 $undo  = ( 'undo' === $mode );
 
 $meta_backup     = '_cq_afi_reorder_backup_post_date';
 $meta_backup_gmt = '_cq_afi_reorder_backup_post_date_gmt';
+
+$switched = false;
+
+// On multisite, resolve which site to operate on, then switch into it.
+if ( is_multisite() ) {
+	if ( $site_id <= 0 ) {
+		$sites = get_sites(
+			array(
+				'number'  => 0,
+				'orderby' => 'id',
+				'order'   => 'ASC',
+			)
+		);
+		WP_CLI::log( 'This is a multisite network. Available sites:' );
+		WP_CLI::log( str_repeat( '-', 70 ) );
+		foreach ( $sites as $site ) {
+			$bid     = (int) $site->blog_id;
+			$details = get_blog_details( array( 'blog_id' => $bid ) );
+			$name    = $details ? $details->blogname : '(unknown)';
+			$url     = $details ? $details->siteurl : get_site_url( $bid );
+			WP_CLI::log( sprintf( '  [%d]  %s  —  %s', $bid, $name, $url ) );
+		}
+		WP_CLI::log( str_repeat( '-', 70 ) );
+
+		// Prompt for the site ID (interactive STDIN).
+		fwrite( STDOUT, 'Enter the site ID to operate on: ' );
+		$entered = is_resource( STDIN ) ? fgets( STDIN ) : false;
+		$site_id = ( false !== $entered ) ? (int) trim( $entered ) : 0;
+	}
+
+	if ( $site_id <= 0 || ! get_blog_details( array( 'blog_id' => $site_id ) ) ) {
+		WP_CLI::error( sprintf( 'Invalid or missing site ID (%d). Re-run and pass the numeric site ID, e.g. "... %s 2".', $site_id, $apply ? 'apply' : ( $undo ? 'undo' : 'dry' ) ) );
+	}
+
+	switch_to_blog( $site_id );
+	$switched = true;
+	WP_CLI::log( sprintf( 'Operating on site #%d (%s)', $site_id, get_site_url( $site_id ) ) );
+}
 
 global $wpdb;
 
@@ -107,6 +171,9 @@ if ( $undo ) {
 	}
 	WP_CLI::log( str_repeat( '-', 70 ) );
 	WP_CLI::success( sprintf( 'Reverted %d post(s) from the rollback copy.', $changed ) );
+	if ( $switched ) {
+		restore_current_blog();
+	}
 	return;
 }
 
@@ -129,9 +196,9 @@ foreach ( $ids as $id ) {
 		$time_part = '12:00:00';
 	}
 
-	$target_date     = gmdate( 'Y-m-d', strtotime( $base_date . ' -' . $index . ' days' ) );
-	$new_post_date   = $target_date . ' ' . $time_part;
-	$new_post_gmt    = get_gmt_from_date( $new_post_date );
+	$target_date   = gmdate( 'Y-m-d', strtotime( $base_date . ' -' . $index . ' days' ) );
+	$new_post_date = $target_date . ' ' . $time_part;
+	$new_post_gmt  = get_gmt_from_date( $new_post_date );
 
 	++$index;
 
@@ -169,4 +236,8 @@ if ( $apply ) {
 	WP_CLI::success( sprintf( 'Reordered %d post date(s). Re-run with "undo" to revert.', $changed ) );
 } else {
 	WP_CLI::success( sprintf( 'DRY RUN: %d post(s) would be reordered. Re-run with "apply" to write the changes.', $candidates ) );
+}
+
+if ( $switched ) {
+	restore_current_blog();
 }
